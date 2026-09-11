@@ -1,0 +1,23 @@
+name: Require staging source
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  check-source:
+    name: Source branch must be staging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify pull request originates from staging
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$HEAD_REF" != "staging" ]; then
+            echo "::error::Direct merges into '$BASE_REF' are not allowed. This pull request comes from '$HEAD_REF'. Merge into 'staging' first, then promote staging -> $BASE_REF."
+            exit 1
+          fi
+          echo "Source branch is 'staging'. Promotion allowed."
