@@ -1,0 +1,4 @@
+{
+  "name": "ff-merge",
+  "description": "Promote staging to main/master by fast-forward once the PR is approved and labelled ff-merge."
+}
