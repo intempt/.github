@@ -1,0 +1,81 @@
+name: ff-merge
+
+on:
+  workflow_call:
+    secrets:
+      FF_BOT_PRIVATE_KEY:
+        required: true
+
+jobs:
+  ff-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: app
+        with:
+          app-id: ${{ vars.FF_BOT_APP_ID }}
+          private-key: ${{ secrets.FF_BOT_PRIVATE_KEY }}
+
+      - name: Verify the promotion
+        id: verify
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          ACTOR: ${{ github.event.sender.login }}
+        run: |
+          set -euo pipefail
+          fail() { echo "reason=$1" >> "$GITHUB_OUTPUT"; echo "::error::$1"; exit 1; }
+
+          pr=$(gh api "repos/$REPO/pulls/$PR")
+          [ "$(jq -r .state <<<"$pr")" = open ] || fail "PR is not open"
+          [ "$(jq -r .head.ref <<<"$pr")" = staging ] || fail "only staging can be promoted"
+          [ "$(jq -r .head.repo.full_name <<<"$pr")" = "$REPO" ] || fail "head must be this repo's staging, not a fork"
+          [[ "$BASE" = main || "$BASE" = master ]] || fail "base must be main or master"
+          head_sha=$(jq -r .head.sha <<<"$pr")
+
+          perm=$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission)
+          [[ "$perm" = admin || "$perm" = write ]] || fail "@$ACTOR needs write access to promote"
+
+          verdict=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" | jq -rs --arg sha "$head_sha" '
+            add
+            | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED"))
+            | group_by(.user.login) | map(last)
+            | if any(.state == "CHANGES_REQUESTED") then "changes requested"
+              elif any(.state == "APPROVED" and .commit_id == $sha) then "ok"
+              else "no approval on the current head \($sha[0:7])" end')
+          [ "$verdict" = ok ] || fail "$verdict"
+
+          echo "sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Fast-forward
+        id: ff
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          SHA: ${{ steps.verify.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$SHA"
+          git merge --ff-only "$SHA" || { echo "reason=$BASE has commits staging lacks; fast-forward impossible" >> "$GITHUB_OUTPUT"; exit 1; }
+          git push origin "HEAD:refs/heads/$BASE"
+
+      - name: Report
+        if: always()
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          REASON: ${{ steps.verify.outputs.reason || steps.ff.outputs.reason }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api -X DELETE "repos/$REPO/issues/$PR/labels/ff-merge" >/dev/null 2>&1 || true
+          if [ "${{ job.status }}" != success ]; then
+            gh pr comment "$PR" -R "$REPO" --body "ff-merge refused: ${REASON:-see the run} ($RUN)"
+          fi
