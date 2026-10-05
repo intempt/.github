@@ -27,3 +27,17 @@ eval "$(brain/ops/bin/credentials.sh openrouter)"
 jev "Summarise this CI log in 5 bullets" < build.log
 jev batch in.jsonl out.jsonl --json --system-file rubric.txt --concurrency 12
 ```
+
+### Decide before you chat
+
+For a yes/no, pick-one or ranking question per item, use `jev decide-batch` (TypeSafe Jev's
+Decisions API, `typesafe/jev-1.13`): typed answers with probabilities, billed on input tokens only,
+about $0.00002 an item. Accept answers at or above 0.8 and at or below 0.2 and review the band
+between. Use `jev chat-batch` only when the answer has to be text.
+
+The full rule is `engineering/AGENT_RULES.md` in `intempt/brain`, and `brain/install.sh` imports it
+into every developer's `~/.claude/CLAUDE.md`:
+
+```bash
+cd ~/Intempt/brain && git pull && git-crypt unlock && ./install.sh --role <yours>
+```
