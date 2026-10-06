@@ -8,7 +8,7 @@ on:
 
 jobs:
   ff-merge:
-    runs-on: ubuntu-latest
+    runs-on: intempt-ubuntu-github-runner
     steps:
       - uses: actions/create-github-app-token@v1
         id: app
