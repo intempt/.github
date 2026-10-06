@@ -10,6 +10,15 @@ jobs:
   ff-merge:
     runs-on: intempt-ubuntu-github-runner
     steps:
+      # The in-cluster runner image has jq and git but not gh.
+      - name: Install gh
+        run: |
+          command -v gh >/dev/null && exit 0
+          sudo install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli.gpg >/dev/null
+          echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq gh
+
       - uses: actions/create-github-app-token@v1
         id: app
         with:
