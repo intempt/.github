@@ -1,8 +1,6 @@
 name: ban-hosted-runners
 on:
   pull_request:
-    paths:
-      - '.github/workflows/**'
 jobs:
   ban-hosted-runners:
     runs-on: intempt-ubuntu-github-runner
@@ -11,9 +9,8 @@ jobs:
       - name: Reject GitHub-hosted ubuntu runners
         run: |
           set -euo pipefail
-          hits=$(grep -rEn 'runs-on:[^#]*ubuntu-(latest|20\.04|22\.04|24\.04)' .github/workflows/ || true)
-          arr=$(grep -rEn '\[[^]]*ubuntu-(latest|20\.04|22\.04|24\.04)' .github/workflows/ || true)
-          found="$hits$arr"
+          if [ ! -d .github/workflows ]; then echo "No workflows directory."; exit 0; fi
+          found=$(grep -rEn 'ubuntu-(latest|20\.04|22\.04|24\.04)' .github/workflows/ || true)
           if [ -n "$found" ]; then
             echo "::error::GitHub-hosted ubuntu runners are banned. Use runs-on: intempt-ubuntu-github-runner. macOS and Windows runners remain allowed."
             printf '%s\n' "$found"
