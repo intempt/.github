@@ -9,11 +9,16 @@ jobs:
       - name: Reject GitHub-hosted ubuntu runners
         run: |
           set -euo pipefail
-          if [ ! -d .github/workflows ]; then echo "No workflows directory."; exit 0; fi
-          found=$(grep -rEn 'ubuntu-(latest|20\.04|22\.04|24\.04)' .github/workflows/ || true)
-          if [ -n "$found" ]; then
-            echo "::error::GitHub-hosted ubuntu runners are banned. Use runs-on: intempt-ubuntu-github-runner. macOS and Windows runners remain allowed."
-            printf '%s\n' "$found"
+          [ -d .github/workflows ] || { echo "No workflows directory."; exit 0; }
+          viol=""
+          while IFS= read -r wf; do
+            if sed 's/#.*//' "$wf" | grep -qE 'ubuntu-(latest|20\.04|22\.04|24\.04)'; then
+              viol="$viol $wf"
+            fi
+          done < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \))
+          if [ -n "$viol" ]; then
+            echo "::error::GitHub-hosted ubuntu runners are banned. Use runs-on: intempt-ubuntu-github-runner. macOS and Windows runners remain allowed. Offending files:$viol"
+            for wf in $viol; do echo "--- $wf ---"; sed 's/#.*//' "$wf" | grep -nE 'ubuntu-(latest|20\.04|22\.04|24\.04)' || true; done
             exit 1
           fi
-          echo "OK: no GitHub-hosted ubuntu runners."
+          echo "OK: no GitHub-hosted ubuntu runners (comments ignored)."
