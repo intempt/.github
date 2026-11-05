@@ -3,6 +3,8 @@ on:
   pull_request:
 jobs:
   ban-hosted-runners:
+    # The ban is for private repos; public .github is exempt and cannot use the in-cluster runners.
+    if: github.event.repository.private
     runs-on: intempt-ubuntu-github-runner
     steps:
       - uses: actions/checkout@v4

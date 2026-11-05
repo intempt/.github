@@ -8,7 +8,8 @@ on:
 
 jobs:
   ff-merge:
-    runs-on: intempt-ubuntu-github-runner
+    # Callers are private repos on the in-cluster runners; the public .github repo is not served there.
+    runs-on: ${{ github.event.repository.private && 'intempt-ubuntu-github-runner' || 'ubuntu-latest' }}
     steps:
       - uses: actions/create-github-app-token@v1
         id: app
