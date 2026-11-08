@@ -1,0 +1,15 @@
+name: ad-bot-approve
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+concurrency:
+  group: ad-bot-approve-${{ github.repository }}
+
+jobs:
+  ad-bot-approve:
+    if: github.event.label.name == 'admin-release'
+    uses: intempt/.github/.github/workflows/ad-bot-approve.yml@main
+    secrets:
+      AD_BOT_PRIVATE_KEY: ${{ secrets.AD_BOT_PRIVATE_KEY }}

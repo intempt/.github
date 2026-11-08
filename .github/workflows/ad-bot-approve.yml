@@ -1,0 +1,46 @@
+name: ad-bot-approve
+
+on:
+  workflow_call:
+    secrets:
+      AD_BOT_PRIVATE_KEY:
+        required: true
+
+jobs:
+  approve:
+    runs-on: intempt-ubuntu-github-runner
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: app
+        with:
+          app-id: ${{ vars.AD_BOT_APP_ID }}
+          private-key: ${{ secrets.AD_BOT_PRIVATE_KEY }}
+
+      - name: Approve the promotion with admin provenance
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          ACTOR: ${{ github.event.sender.login }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; gh pr comment "$PR" -R "$REPO" --body "ad-bot refused: $1"; gh api -X DELETE "repos/$REPO/issues/$PR/labels/admin-release" >/dev/null 2>&1 || true; exit 1; }
+
+          pr=$(gh api "repos/$REPO/pulls/$PR")
+          [ "$(jq -r .state <<<"$pr")" = open ] || fail "PR is not open"
+          [ "$(jq -r .head.ref <<<"$pr")" = staging ] || fail "only staging can be promoted"
+          [ "$(jq -r .head.repo.full_name <<<"$pr")" = "$REPO" ] || fail "head must be this repo's staging, not a fork"
+          [[ "$BASE" = main || "$BASE" = master ]] || fail "base must be main or master"
+
+          perm=$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
+          [ "$perm" = admin ] || fail "@$ACTOR must be a repo/org admin to waive robot review (got: $perm)"
+
+          head_sha=$(jq -r .head.sha <<<"$pr")
+          gh api -X POST "repos/$REPO/pulls/$PR/reviews" \
+            -f event=APPROVE \
+            -f commit_id="$head_sha" \
+            -f body="admin-bot approval. Robot review waived by admin @$ACTOR (emergency path). Provenance: ad-bot. Apply the \`ff-merge\` label for FF_BOT to fast-forward main, or admin-FF directly."
+
+          gh api -X DELETE "repos/$REPO/issues/$PR/labels/admin-release" >/dev/null 2>&1 || true
+          echo "ad-bot approved PR #$PR at ${head_sha:0:7} on behalf of admin @$ACTOR"
