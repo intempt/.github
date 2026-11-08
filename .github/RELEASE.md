@@ -9,3 +9,5 @@ Promotions to `main` are bot-only. No human posts an approving review.
 `brain/engineering/ops/release/promotion-approval.md`.
 
 _Validated: blu-bot full admin pipeline, 2026-11-08._
+
+_e2e run 5: 10:11:06_
