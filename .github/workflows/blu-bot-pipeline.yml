@@ -23,6 +23,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           BASE: ${{ github.event.pull_request.base.ref }}
           ACTOR: ${{ github.event.sender.login }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
 
@@ -33,13 +34,16 @@ jobs:
             exit 1
           }
 
+          # Green = every check-run and commit status on the PR head is complete and
+          # passed, EXCLUDING this very run (its own check is in_progress until we
+          # finish) and the ff-merge promotion workflow.
           wait_ci_green() {
             local pr="$1" sha tries=0 runs bad pending sjson sbad spending
             sha=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
             while [ "$tries" -lt 80 ]; do
               runs=$(gh api "repos/$REPO/commits/$sha/check-runs?per_page=100" 2>/dev/null || echo '{"check_runs":[]}')
-              bad=$(echo "$runs" | jq '[.check_runs[] | select((.name|ascii_downcase|test("blu-bot|ff-merge"))|not) | select(.status=="completed" and (((.conclusion//"")|ascii_downcase) as $c | ($c=="success" or $c=="neutral" or $c=="skipped")|not))] | length')
-              pending=$(echo "$runs" | jq '[.check_runs[] | select((.name|ascii_downcase|test("blu-bot|ff-merge"))|not) | select(.status!="completed")] | length')
+              bad=$(echo "$runs" | jq --arg rid "$RUN_ID" '[.check_runs[] | select(((.details_url // "")|test("/runs/"+$rid+"/"))|not) | select((.name|ascii_downcase|test("ff-merge"))|not) | select(.status=="completed" and (((.conclusion//"")|ascii_downcase) as $c | ($c=="success" or $c=="neutral" or $c=="skipped")|not))] | length')
+              pending=$(echo "$runs" | jq --arg rid "$RUN_ID" '[.check_runs[] | select(((.details_url // "")|test("/runs/"+$rid+"/"))|not) | select((.name|ascii_downcase|test("ff-merge"))|not) | select(.status!="completed")] | length')
               sjson=$(gh api "repos/$REPO/commits/$sha/status" 2>/dev/null || echo '{"statuses":[]}')
               sbad=$(echo "$sjson" | jq '[.statuses[] | select((.context|ascii_downcase|test("blu-bot|ff-merge"))|not) | select(.state=="failure" or .state=="error")] | length')
               spending=$(echo "$sjson" | jq '[.statuses[] | select((.context|ascii_downcase|test("blu-bot|ff-merge"))|not) | select(.state=="pending")] | length')
