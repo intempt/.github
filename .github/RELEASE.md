@@ -7,3 +7,5 @@ Promotions to `main` are bot-only. No human posts an approving review.
 
 `main` is advanced only by FF_BOT. The full standard, provenance, and privileges are in
 `brain/engineering/ops/release/promotion-approval.md`.
+
+_Validated: blu-bot full admin pipeline, 2026-11-08._
