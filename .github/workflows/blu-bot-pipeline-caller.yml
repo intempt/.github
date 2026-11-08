@@ -1,15 +1,15 @@
-name: blu-bot-approve
+name: blu-bot-pipeline
 
 on:
   pull_request_target:
     types: [labeled]
 
 concurrency:
-  group: blu-bot-approve-${{ github.repository }}
+  group: blu-bot-pipeline-${{ github.repository }}-${{ github.event.pull_request.number }}
 
 jobs:
-  blu-bot-approve:
+  pipeline:
     if: github.event.label.name == 'admin-release'
-    uses: intempt/.github/.github/workflows/blu-bot-approve.yml@main
+    uses: intempt/.github/.github/workflows/blu-bot-pipeline.yml@main
     secrets:
       BLU_BOT_PRIVATE_KEY: ${{ secrets.BLU_BOT_PRIVATE_KEY }}

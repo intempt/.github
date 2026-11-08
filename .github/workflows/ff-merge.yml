@@ -35,8 +35,10 @@ jobs:
           [[ "$BASE" = main || "$BASE" = master ]] || fail "base must be main or master"
           head_sha=$(jq -r .head.sha <<<"$pr")
 
-          perm=$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission)
-          [[ "$perm" = admin || "$perm" = write ]] || fail "@$ACTOR needs write access to promote"
+          if [ "$ACTOR" != "intempt-blu-bot[bot]" ]; then
+            perm=$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission)
+            [[ "$perm" = admin || "$perm" = write ]] || fail "@$ACTOR needs write access to promote"
+          fi
 
           verdict=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" | jq -rs --arg sha "$head_sha" '
             add

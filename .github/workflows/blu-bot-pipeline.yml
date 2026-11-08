@@ -1,0 +1,94 @@
+name: blu-bot-pipeline
+
+on:
+  workflow_call:
+    secrets:
+      BLU_BOT_PRIVATE_KEY:
+        required: true
+
+jobs:
+  pipeline:
+    runs-on: intempt-ubuntu-github-runner
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: app
+        with:
+          app-id: ${{ vars.BLU_BOT_APP_ID }}
+          private-key: ${{ secrets.BLU_BOT_PRIVATE_KEY }}
+
+      - name: Drive the admin promotion end to end
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          ACTOR: ${{ github.event.sender.login }}
+        run: |
+          set -euo pipefail
+
+          refuse() {
+            echo "::error::$1"
+            gh pr comment "$PR" -R "$REPO" --body "blu-bot refused: $1" || true
+            gh api -X DELETE "repos/$REPO/issues/$PR/labels/admin-release" >/dev/null 2>&1 || true
+            exit 1
+          }
+
+          wait_ci_green() {
+            local pr="$1" rc
+            set +e
+            gh pr checks "$pr" -R "$REPO" --watch --fail-fast >/dev/null 2>&1
+            rc=$?
+            set -e
+            # 0 = all checks passed, 8 = no checks on the PR (nothing to gate on)
+            [ "$rc" -eq 0 ] || [ "$rc" -eq 8 ] || return 1
+            return 0
+          }
+
+          approve() {
+            local pr="$1" body="$2" sha
+            sha=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
+            gh api -X POST "repos/$REPO/pulls/$pr/reviews" -f event=APPROVE -f commit_id="$sha" -f body="$body"
+          }
+
+          # Only an admin may run blu-bot (robot is waived on this path).
+          perm=$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || echo none)
+          [ "$perm" = admin ] || refuse "@$ACTOR must be a repo/org admin to run blu-bot (got: $perm)"
+
+          state=$(gh api "repos/$REPO/pulls/$PR" --jq .state)
+          [ "$state" = open ] || refuse "PR #$PR is not open"
+
+          PROV="Admin-path approval by blu-bot. Robot review waived by admin @$ACTOR."
+
+          if [ "$BASE" = main ] || [ "$BASE" = master ]; then
+            # Admin labelled a staging -> main promotion PR directly: approve + hand to FF_BOT.
+            [ "$(gh api "repos/$REPO/pulls/$PR" --jq .head.ref)" = staging ] || refuse "only staging can be promoted to $BASE"
+            wait_ci_green "$PR" || refuse "CI is not green on promotion PR #$PR"
+            approve "$PR" "$PROV Promoting staging -> $BASE."
+            gh pr edit "$PR" -R "$REPO" --add-label ff-merge
+            echo "blu-bot approved promotion PR #$PR and labelled ff-merge; FF_BOT will fast-forward $BASE."
+            exit 0
+          fi
+
+          [ "$BASE" = staging ] || refuse "blu-bot runs on a feature->staging PR or a staging->main PR (base was $BASE)"
+
+          # Feature -> staging: wait for CI, approve, merge.
+          wait_ci_green "$PR" || refuse "CI is not green on PR #$PR"
+          approve "$PR" "$PROV Merging to staging."
+          gh pr merge "$PR" -R "$REPO" --squash
+
+          # The push to staging opens (or refreshes) the staging -> main promotion PR via auto-pr.
+          promo=""
+          for _ in $(seq 1 60); do
+            promo=$(gh pr list -R "$REPO" --base main --head staging --state open --json number --jq '.[0].number' 2>/dev/null || true)
+            [ -z "$promo" ] && promo=$(gh pr list -R "$REPO" --base master --head staging --state open --json number --jq '.[0].number' 2>/dev/null || true)
+            [ -n "$promo" ] && break
+            sleep 10
+          done
+          [ -n "$promo" ] || refuse "merged to staging, but no staging -> main promotion PR appeared"
+
+          wait_ci_green "$promo" || refuse "merged to staging, but CI is not green on promotion PR #$promo"
+          approve "$promo" "$PROV Promoting staging -> main."
+          gh pr edit "$promo" -R "$REPO" --add-label ff-merge
+
+          gh api -X DELETE "repos/$REPO/issues/$PR/labels/admin-release" >/dev/null 2>&1 || true
+          echo "blu-bot merged PR #$PR to staging and triggered FF of main via promotion PR #$promo."
