@@ -1,9 +1,9 @@
-name: ad-bot-approve
+name: blu-bot-approve
 
 on:
   workflow_call:
     secrets:
-      AD_BOT_PRIVATE_KEY:
+      BLU_BOT_PRIVATE_KEY:
         required: true
 
 jobs:
@@ -13,8 +13,8 @@ jobs:
       - uses: actions/create-github-app-token@v1
         id: app
         with:
-          app-id: ${{ vars.AD_BOT_APP_ID }}
-          private-key: ${{ secrets.AD_BOT_PRIVATE_KEY }}
+          app-id: ${{ vars.BLU_BOT_APP_ID }}
+          private-key: ${{ secrets.BLU_BOT_PRIVATE_KEY }}
 
       - name: Approve the promotion with admin provenance
         env:
@@ -25,7 +25,7 @@ jobs:
           ACTOR: ${{ github.event.sender.login }}
         run: |
           set -euo pipefail
-          fail() { echo "::error::$1"; gh pr comment "$PR" -R "$REPO" --body "ad-bot refused: $1"; gh api -X DELETE "repos/$REPO/issues/$PR/labels/admin-release" >/dev/null 2>&1 || true; exit 1; }
+          fail() { echo "::error::$1"; gh pr comment "$PR" -R "$REPO" --body "blu-bot refused: $1"; gh api -X DELETE "repos/$REPO/issues/$PR/labels/admin-release" >/dev/null 2>&1 || true; exit 1; }
 
           pr=$(gh api "repos/$REPO/pulls/$PR")
           [ "$(jq -r .state <<<"$pr")" = open ] || fail "PR is not open"
@@ -40,7 +40,7 @@ jobs:
           gh api -X POST "repos/$REPO/pulls/$PR/reviews" \
             -f event=APPROVE \
             -f commit_id="$head_sha" \
-            -f body="admin-bot approval. Robot review waived by admin @$ACTOR (emergency path). Provenance: ad-bot. Apply the \`ff-merge\` label for FF_BOT to fast-forward main, or admin-FF directly."
+            -f body="Admin-path approval by blu-bot. Robot review waived by admin @$ACTOR (emergency path). Apply the \`ff-merge\` label for FF_BOT to fast-forward main, or admin-FF directly."
 
           gh api -X DELETE "repos/$REPO/issues/$PR/labels/admin-release" >/dev/null 2>&1 || true
-          echo "ad-bot approved PR #$PR at ${head_sha:0:7} on behalf of admin @$ACTOR"
+          echo "blu-bot approved PR #$PR at ${head_sha:0:7} on behalf of admin @$ACTOR"
