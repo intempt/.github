@@ -88,23 +88,19 @@ jobs:
           gh api -X PUT "repos/$REPO/pulls/$PR/merge" -f merge_method=squash -f sha="$merge_sha" \
             || refuse "could not merge PR #$PR to staging (not mergeable)"
 
-          # Find the staging -> production PR, or open it ourselves. We do not depend on
-          # auto-pr: when it is flaky its failed run would also leave a red check on the
-          # staging head, so blu-bot owns opening the promotion PR too.
+          # Wait for auto-pr's staging -> production PR. It must be authored by github-actions,
+          # NOT blu-bot: GitHub forbids approving your own PR, so a blu-bot-authored promotion PR
+          # could never get blu-bot's approval. auto-pr's own flaky check is ignored by wait_ci_green.
           prodbase=main
           gh api "repos/$REPO/branches/main" >/dev/null 2>&1 || prodbase=master
-          promo=$(gh pr list -R "$REPO" --base "$prodbase" --head staging --state open --json number --jq '.[0].number' 2>/dev/null || true)
-          if [ -z "$promo" ]; then
-            gh pr create -R "$REPO" --base "$prodbase" --head staging \
-              --title "Merge Staging into Main" \
-              --body "Promotion opened by blu-bot." >/dev/null 2>&1 || true
-            for _ in $(seq 1 12); do
-              promo=$(gh pr list -R "$REPO" --base "$prodbase" --head staging --state open --json number --jq '.[0].number' 2>/dev/null || true)
-              [ -n "$promo" ] && break
-              sleep 5
-            done
-          fi
-          [ -n "$promo" ] || refuse "merged to staging, but could not find or open a staging -> $prodbase PR"
+          promo=""
+          for _ in $(seq 1 60); do
+            promo=$(gh pr list -R "$REPO" --base "$prodbase" --head staging --state open --json number,author \
+              --jq '[.[] | select(.author.login != "intempt-blu-bot")][0].number' 2>/dev/null || true)
+            [ -n "$promo" ] && break
+            sleep 10
+          done
+          [ -n "$promo" ] || refuse "merged to staging, but no github-actions staging -> $prodbase PR appeared"
 
           wait_ci_green "$promo" || refuse "merged to staging, but CI is not green on promotion PR #$promo"
           approve "$promo" "$PROV Promoting staging -> main."
