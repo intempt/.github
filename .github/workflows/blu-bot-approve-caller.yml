@@ -1,0 +1,15 @@
+name: blu-bot-approve
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+concurrency:
+  group: blu-bot-approve-${{ github.repository }}
+
+jobs:
+  blu-bot-approve:
+    if: github.event.label.name == 'admin-release'
+    uses: intempt/.github/.github/workflows/blu-bot-approve.yml@main
+    secrets:
+      BLU_BOT_PRIVATE_KEY: ${{ secrets.BLU_BOT_PRIVATE_KEY }}
