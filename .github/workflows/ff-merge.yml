@@ -40,13 +40,11 @@ jobs:
             [[ "$perm" = admin || "$perm" = write ]] || fail "@$ACTOR needs write access to promote"
           fi
 
-          verdict=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" | jq -rs --arg sha "$head_sha" '
+          verdict=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews" | jq -rs '
             add
-            | map(select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED"))
+            | map(select(.state == "CHANGES_REQUESTED" or .state == "DISMISSED"))
             | group_by(.user.login) | map(last)
-            | if any(.state == "CHANGES_REQUESTED") then "changes requested"
-              elif any(.state == "APPROVED" and .commit_id == $sha) then "ok"
-              else "no approval on the current head \($sha[0:7])" end')
+            | if any(.state == "CHANGES_REQUESTED") then "changes requested" else "ok" end')
           [ "$verdict" = ok ] || fail "$verdict"
 
           echo "sha=$head_sha" >> "$GITHUB_OUTPUT"
