@@ -34,14 +34,20 @@ jobs:
           }
 
           wait_ci_green() {
-            local pr="$1" rc
-            set +e
-            gh pr checks "$pr" -R "$REPO" --watch --fail-fast >/dev/null 2>&1
-            rc=$?
-            set -e
-            # 0 = all checks passed, 8 = no checks on the PR (nothing to gate on)
-            [ "$rc" -eq 0 ] || [ "$rc" -eq 8 ] || return 1
-            return 0
+            local pr="$1" sha tries=0 runs bad pending sjson sbad spending
+            sha=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
+            while [ "$tries" -lt 80 ]; do
+              runs=$(gh api "repos/$REPO/commits/$sha/check-runs?per_page=100" 2>/dev/null || echo '{"check_runs":[]}')
+              bad=$(echo "$runs" | jq '[.check_runs[] | select((.name|ascii_downcase|test("blu-bot|ff-merge"))|not) | select(.status=="completed" and (((.conclusion//"")|ascii_downcase) as $c | ($c=="success" or $c=="neutral" or $c=="skipped")|not))] | length')
+              pending=$(echo "$runs" | jq '[.check_runs[] | select((.name|ascii_downcase|test("blu-bot|ff-merge"))|not) | select(.status!="completed")] | length')
+              sjson=$(gh api "repos/$REPO/commits/$sha/status" 2>/dev/null || echo '{"statuses":[]}')
+              sbad=$(echo "$sjson" | jq '[.statuses[] | select((.context|ascii_downcase|test("blu-bot|ff-merge"))|not) | select(.state=="failure" or .state=="error")] | length')
+              spending=$(echo "$sjson" | jq '[.statuses[] | select((.context|ascii_downcase|test("blu-bot|ff-merge"))|not) | select(.state=="pending")] | length')
+              if [ "$bad" -gt 0 ] || [ "$sbad" -gt 0 ]; then return 1; fi
+              if [ "$pending" -eq 0 ] && [ "$spending" -eq 0 ]; then return 0; fi
+              sleep 10; tries=$((tries+1))
+            done
+            return 2
           }
 
           approve() {
