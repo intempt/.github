@@ -84,7 +84,9 @@ jobs:
           # Feature -> staging: wait for CI, approve, merge.
           wait_ci_green "$PR" || refuse "CI is not green on PR #$PR"
           approve "$PR" "$PROV Merging to staging."
-          gh pr merge "$PR" -R "$REPO" --squash
+          merge_sha=$(gh api "repos/$REPO/pulls/$PR" --jq .head.sha)
+          gh api -X PUT "repos/$REPO/pulls/$PR/merge" -f merge_method=squash -f sha="$merge_sha" \
+            || refuse "could not merge PR #$PR to staging (not mergeable)"
 
           # The push to staging opens (or refreshes) the staging -> main promotion PR via auto-pr.
           promo=""
