@@ -24,6 +24,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.ref }}
           ACTOR: ${{ github.event.sender.login }}
           RUN_ID: ${{ github.run_id }}
+          DEFAULT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -93,14 +94,24 @@ jobs:
           # could never get blu-bot's approval. auto-pr's own flaky check is ignored by wait_ci_green.
           prodbase=main
           gh api "repos/$REPO/branches/main" >/dev/null 2>&1 || prodbase=master
+          find_promo() {
+            gh pr list -R "$REPO" --base "$prodbase" --head staging --state open --json number,author \
+              --jq '[.[] | select(.author.login != "intempt-blu-bot")][0].number' 2>/dev/null || true
+          }
+          # Give auto-pr a short head start, then open the promotion PR ourselves using the default
+          # Actions token so it is authored by github-actions (blu-bot cannot approve its own PR).
           promo=""
-          for _ in $(seq 1 60); do
-            promo=$(gh pr list -R "$REPO" --base "$prodbase" --head staging --state open --json number,author \
-              --jq '[.[] | select(.author.login != "intempt-blu-bot")][0].number' 2>/dev/null || true)
-            [ -n "$promo" ] && break
-            sleep 10
+          for _ in $(seq 1 6); do
+            promo=$(find_promo); [ -n "$promo" ] && break; sleep 5
           done
-          [ -n "$promo" ] || refuse "merged to staging, but no github-actions staging -> $prodbase PR appeared"
+          if [ -z "$promo" ]; then
+            GH_TOKEN="$DEFAULT_TOKEN" gh pr create -R "$REPO" --base "$prodbase" --head staging \
+              --title "Merge Staging into Main" --body "Promotion opened for blu-bot (admin path)." >/dev/null 2>&1 || true
+            for _ in $(seq 1 12); do
+              promo=$(find_promo); [ -n "$promo" ] && break; sleep 5
+            done
+          fi
+          [ -n "$promo" ] || refuse "merged to staging, but could not obtain a github-actions staging -> $prodbase PR"
 
           wait_ci_green "$promo" || refuse "merged to staging, but CI is not green on promotion PR #$promo"
           approve "$promo" "$PROV Promoting staging -> main."
