@@ -42,11 +42,11 @@ jobs:
             sha=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
             while [ "$tries" -lt 80 ]; do
               runs=$(gh api "repos/$REPO/commits/$sha/check-runs?per_page=100" 2>/dev/null || echo '{"check_runs":[]}')
-              bad=$(echo "$runs" | jq --arg rid "$RUN_ID" '[.check_runs[] | select(((.details_url // "")|test("/runs/"+$rid+"/"))|not) | select((.name|ascii_downcase|test("ff-merge"))|not) | select(.status=="completed" and (((.conclusion//"")|ascii_downcase) as $c | ($c=="success" or $c=="neutral" or $c=="skipped")|not))] | length')
-              pending=$(echo "$runs" | jq --arg rid "$RUN_ID" '[.check_runs[] | select(((.details_url // "")|test("/runs/"+$rid+"/"))|not) | select((.name|ascii_downcase|test("ff-merge"))|not) | select(.status!="completed")] | length')
+              bad=$(echo "$runs" | jq --arg rid "$RUN_ID" '[.check_runs[] | select(((.details_url // "")|test("/runs/"+$rid+"/"))|not) | select((.name|ascii_downcase|test("ff-merge|create.?pr|autopr|blu-bot"))|not) | select(.status=="completed" and (((.conclusion//"")|ascii_downcase) as $c | ($c=="success" or $c=="neutral" or $c=="skipped")|not))] | length')
+              pending=$(echo "$runs" | jq --arg rid "$RUN_ID" '[.check_runs[] | select(((.details_url // "")|test("/runs/"+$rid+"/"))|not) | select((.name|ascii_downcase|test("ff-merge|create.?pr|autopr|blu-bot"))|not) | select(.status!="completed")] | length')
               sjson=$(gh api "repos/$REPO/commits/$sha/status" 2>/dev/null || echo '{"statuses":[]}')
-              sbad=$(echo "$sjson" | jq '[.statuses[] | select((.context|ascii_downcase|test("blu-bot|ff-merge"))|not) | select(.state=="failure" or .state=="error")] | length')
-              spending=$(echo "$sjson" | jq '[.statuses[] | select((.context|ascii_downcase|test("blu-bot|ff-merge"))|not) | select(.state=="pending")] | length')
+              sbad=$(echo "$sjson" | jq '[.statuses[] | select((.context|ascii_downcase|test("blu-bot|ff-merge|create.?pr|autopr"))|not) | select(.state=="failure" or .state=="error")] | length')
+              spending=$(echo "$sjson" | jq '[.statuses[] | select((.context|ascii_downcase|test("blu-bot|ff-merge|create.?pr|autopr"))|not) | select(.state=="pending")] | length')
               if [ "$bad" -gt 0 ] || [ "$sbad" -gt 0 ]; then return 1; fi
               if [ "$pending" -eq 0 ] && [ "$spending" -eq 0 ]; then return 0; fi
               sleep 10; tries=$((tries+1))
@@ -88,15 +88,23 @@ jobs:
           gh api -X PUT "repos/$REPO/pulls/$PR/merge" -f merge_method=squash -f sha="$merge_sha" \
             || refuse "could not merge PR #$PR to staging (not mergeable)"
 
-          # The push to staging opens (or refreshes) the staging -> main promotion PR via auto-pr.
-          promo=""
-          for _ in $(seq 1 60); do
-            promo=$(gh pr list -R "$REPO" --base main --head staging --state open --json number --jq '.[0].number' 2>/dev/null || true)
-            [ -z "$promo" ] && promo=$(gh pr list -R "$REPO" --base master --head staging --state open --json number --jq '.[0].number' 2>/dev/null || true)
-            [ -n "$promo" ] && break
-            sleep 10
-          done
-          [ -n "$promo" ] || refuse "merged to staging, but no staging -> main promotion PR appeared"
+          # Find the staging -> production PR, or open it ourselves. We do not depend on
+          # auto-pr: when it is flaky its failed run would also leave a red check on the
+          # staging head, so blu-bot owns opening the promotion PR too.
+          prodbase=main
+          gh api "repos/$REPO/branches/main" >/dev/null 2>&1 || prodbase=master
+          promo=$(gh pr list -R "$REPO" --base "$prodbase" --head staging --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$promo" ]; then
+            gh pr create -R "$REPO" --base "$prodbase" --head staging \
+              --title "Merge Staging into Main" \
+              --body "Promotion opened by blu-bot." >/dev/null 2>&1 || true
+            for _ in $(seq 1 12); do
+              promo=$(gh pr list -R "$REPO" --base "$prodbase" --head staging --state open --json number --jq '.[0].number' 2>/dev/null || true)
+              [ -n "$promo" ] && break
+              sleep 5
+            done
+          fi
+          [ -n "$promo" ] || refuse "merged to staging, but could not find or open a staging -> $prodbase PR"
 
           wait_ci_green "$promo" || refuse "merged to staging, but CI is not green on promotion PR #$promo"
           approve "$promo" "$PROV Promoting staging -> main."
