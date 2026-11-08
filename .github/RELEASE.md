@@ -13,3 +13,5 @@ _Validated: blu-bot full admin pipeline, 2026-11-08._
 _e2e run 6 (final): 10:31:57_
 
 _e2e run 7: 10:44:01_
+
+_e2e run 8: 10:53:39_
