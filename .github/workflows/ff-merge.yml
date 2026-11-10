@@ -10,7 +10,7 @@ jobs:
   ff-merge:
     runs-on: intempt-ubuntu-github-runner
     steps:
-      - uses: actions/create-github-app-token@v1
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         id: app
         with:
           app-id: ${{ vars.FF_BOT_APP_ID }}
@@ -51,7 +51,7 @@ jobs:
 
           echo "sha=$head_sha" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           fetch-depth: 0
