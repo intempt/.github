@@ -38,18 +38,37 @@ jobs:
           # Green = every check-run and commit status on the PR head is complete and
           # passed, EXCLUDING this very run (its own check is in_progress until we
           # finish) and the ff-merge promotion workflow.
+          # Green = every check-run, commit status AND Actions workflow run on the PR head is
+          # complete and passed, EXCLUDING this run and the bot/promotion workflows. We also wait for
+          # CI to actually APPEAR: a just-pushed build sits queued/in_progress as a workflow run for
+          # up to a minute before it registers as a check-run, so check-runs alone read as "nothing
+          # pending" = green and blu-bot merged before CI even started. The workflow-run poll plus the
+          # "seen" gate close that race; the grace below still lets a repo with genuinely no CI pass.
           wait_ci_green() {
             local pr="$1" sha tries=0 runs bad pending sjson sbad spending
+            local wruns wactive wfailed wtotal seen=0
+            local xchk="ff-merge|create.?pr|autopr|blu-bot"
+            local xflow="ff-merge|create.?pr|auto.?pr|blu-bot|merge staging"
             sha=$(gh api "repos/$REPO/pulls/$pr" --jq .head.sha)
             while [ "$tries" -lt 270 ]; do
               runs=$(gh api "repos/$REPO/commits/$sha/check-runs?per_page=100" 2>/dev/null || echo '{"check_runs":[]}')
-              bad=$(echo "$runs" | jq --arg rid "$RUN_ID" '[.check_runs[] | select(((.details_url // "")|test("/runs/"+$rid+"/"))|not) | select((.name|ascii_downcase|test("ff-merge|create.?pr|autopr|blu-bot"))|not) | select(.status=="completed" and (((.conclusion//"")|ascii_downcase) as $c | ($c=="success" or $c=="neutral" or $c=="skipped")|not))] | length')
-              pending=$(echo "$runs" | jq --arg rid "$RUN_ID" '[.check_runs[] | select(((.details_url // "")|test("/runs/"+$rid+"/"))|not) | select((.name|ascii_downcase|test("ff-merge|create.?pr|autopr|blu-bot"))|not) | select(.status!="completed")] | length')
+              bad=$(echo "$runs" | jq --arg rid "$RUN_ID" --arg x "$xchk" '[.check_runs[] | select(((.details_url // "")|test("/runs/"+$rid+"/"))|not) | select((.name|ascii_downcase|test($x))|not) | select(.status=="completed" and (((.conclusion//"")|ascii_downcase) as $c | ($c=="success" or $c=="neutral" or $c=="skipped")|not))] | length')
+              pending=$(echo "$runs" | jq --arg rid "$RUN_ID" --arg x "$xchk" '[.check_runs[] | select(((.details_url // "")|test("/runs/"+$rid+"/"))|not) | select((.name|ascii_downcase|test($x))|not) | select(.status!="completed")] | length')
               sjson=$(gh api "repos/$REPO/commits/$sha/status" 2>/dev/null || echo '{"statuses":[]}')
               sbad=$(echo "$sjson" | jq '[.statuses[] | select((.context|ascii_downcase|test("blu-bot|ff-merge|create.?pr|autopr"))|not) | select(.state=="failure" or .state=="error")] | length')
               spending=$(echo "$sjson" | jq '[.statuses[] | select((.context|ascii_downcase|test("blu-bot|ff-merge|create.?pr|autopr"))|not) | select(.state=="pending")] | length')
-              if [ "$bad" -gt 0 ] || [ "$sbad" -gt 0 ]; then return 1; fi
-              if [ "$pending" -eq 0 ] && [ "$spending" -eq 0 ]; then return 0; fi
+              wruns=$(gh api "repos/$REPO/actions/runs?head_sha=$sha&per_page=100" 2>/dev/null || echo '{"workflow_runs":[]}')
+              wactive=$(echo "$wruns" | jq --arg rid "$RUN_ID" --arg x "$xflow" '[.workflow_runs[] | select((.id|tostring) != $rid) | select(((.name//"")|ascii_downcase|test($x))|not) | select(.status!="completed")] | length')
+              wfailed=$(echo "$wruns" | jq --arg rid "$RUN_ID" --arg x "$xflow" '[.workflow_runs[] | select((.id|tostring) != $rid) | select(((.name//"")|ascii_downcase|test($x))|not) | select(.status=="completed" and (((.conclusion//"")|ascii_downcase) as $c | ($c=="success" or $c=="neutral" or $c=="skipped")|not))] | length')
+              wtotal=$(echo "$wruns" | jq --arg rid "$RUN_ID" --arg x "$xflow" '[.workflow_runs[] | select((.id|tostring) != $rid) | select(((.name//"")|ascii_downcase|test($x))|not)] | length')
+              # Hard red on any failure.
+              if [ "$bad" -gt 0 ] || [ "$sbad" -gt 0 ] || [ "$wfailed" -gt 0 ]; then return 1; fi
+              # CI has appeared at all (this iteration or earlier)?
+              if [ "$pending" -gt 0 ] || [ "$spending" -gt 0 ] || [ "$wactive" -gt 0 ] || [ "$wtotal" -gt 0 ]; then seen=1; fi
+              # Green only when nothing is pending/active AND CI actually ran.
+              if [ "$pending" -eq 0 ] && [ "$spending" -eq 0 ] && [ "$wactive" -eq 0 ] && [ "$seen" -eq 1 ]; then return 0; fi
+              # Grace: no CI has appeared after ~3 min -> repo has none, proceed.
+              if [ "$seen" -eq 0 ] && [ "$tries" -ge 9 ]; then return 0; fi
               sleep 20; tries=$((tries+1))
             done
             return 2
