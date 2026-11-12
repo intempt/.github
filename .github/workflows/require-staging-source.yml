@@ -6,7 +6,7 @@ on:
 jobs:
   check-source:
     name: Source branch must be staging
-    runs-on: intempt-ubuntu-github-runner
+    runs-on: ${{ github.event.repository.private && 'intempt-ubuntu-github-runner' || 'ubuntu-latest' }}
     steps:
       - name: Verify pull request originates from staging
         env:
