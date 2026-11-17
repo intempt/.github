@@ -24,7 +24,6 @@ jobs:
           BASE: ${{ github.event.pull_request.base.ref }}
           ACTOR: ${{ github.event.sender.login }}
           RUN_ID: ${{ github.run_id }}
-          DEFAULT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -101,40 +100,42 @@ jobs:
 
           [ "$BASE" = staging ] || refuse "blu-bot runs on a feature->staging PR or a staging->main PR (base was $BASE)"
 
-          # Feature -> staging: wait for CI, approve, merge.
-          wait_ci_green "$PR" || refuse "CI is not green on PR #$PR"
-          approve "$PR" "$PROV Merging to staging."
-          merge_sha=$(gh api "repos/$REPO/pulls/$PR" --jq .head.sha)
-          gh api -X PUT "repos/$REPO/pulls/$PR/merge" -f merge_method=squash -f sha="$merge_sha" \
-            || refuse "could not merge PR #$PR to staging (not mergeable)"
+          # Feature -> staging: bring the branch up to date, wait for CI, approve, merge. Stops at
+          # staging: promoting staging to production stays a manual step (label the staging -> main
+          # PR `ff-merge`, or `admin-release` for the branch above).
+          #
+          # Branch protection may require the PR to be up to date with staging. The update is pushed
+          # with the blu-bot App token, so CI starts on it (a GITHUB_TOKEN push would start no
+          # workflow). If staging moves again while CI runs, the merge is refused as out of date:
+          # update and go round again, a few times at most.
+          head_sha() { gh api "repos/$REPO/pulls/$1" --jq .head.sha; }
+          behind_by() { gh api "repos/$REPO/compare/$BASE...$(head_sha "$1")" --jq .behind_by; }
 
-          # Wait for auto-pr's staging -> production PR. It must be authored by github-actions,
-          # NOT blu-bot: GitHub forbids approving your own PR, so a blu-bot-authored promotion PR
-          # could never get blu-bot's approval. auto-pr's own flaky check is ignored by wait_ci_green.
-          prodbase=main
-          gh api "repos/$REPO/branches/main" >/dev/null 2>&1 || prodbase=master
-          find_promo() {
-            gh pr list -R "$REPO" --base "$prodbase" --head staging --state open --json number,author \
-              --jq '[.[] | select(.author.login != "intempt-blu-bot")][0].number' 2>/dev/null || true
-          }
-          # Give auto-pr a short head start, then open the promotion PR ourselves using the default
-          # Actions token so it is authored by github-actions (blu-bot cannot approve its own PR).
-          promo=""
-          for _ in $(seq 1 6); do
-            promo=$(find_promo); [ -n "$promo" ] && break; sleep 5
-          done
-          if [ -z "$promo" ]; then
-            GH_TOKEN="$DEFAULT_TOKEN" gh pr create -R "$REPO" --base "$prodbase" --head staging \
-              --title "Merge Staging into Main" --body "Promotion opened for blu-bot (admin path)." >/dev/null 2>&1 || true
-            for _ in $(seq 1 12); do
-              promo=$(find_promo); [ -n "$promo" ] && break; sleep 5
+          update_if_behind() {
+            local pr="$1" before
+            [ "$(behind_by "$pr")" -gt 0 ] || return 0
+            before=$(head_sha "$pr")
+            gh api -X PUT "repos/$REPO/pulls/$pr/update-branch" -f expected_head_sha="$before" >/dev/null               || refuse "could not bring PR #$pr up to date with $BASE (merge conflict?); merge $BASE into it and re-label"
+            # update-branch is asynchronous: wait for the new head before polling its CI.
+            for _ in $(seq 1 30); do
+              [ "$(head_sha "$pr")" != "$before" ] && return 0
+              sleep 5
             done
-          fi
-          [ -n "$promo" ] || refuse "merged to staging, but could not obtain a github-actions staging -> $prodbase PR"
+            refuse "updated PR #$pr with $BASE, but its new head did not appear"
+          }
 
-          wait_ci_green "$promo" || refuse "merged to staging, but CI is not green on promotion PR #$promo"
-          approve "$promo" "$PROV Promoting staging -> main."
-          gh pr edit "$promo" -R "$REPO" --add-label ff-merge
+          merged=0
+          for attempt in 1 2 3; do
+            update_if_behind "$PR"
+            wait_ci_green "$PR" || refuse "CI is not green on PR #$PR"
+            approve "$PR" "$PROV Merging to staging."
+            if gh api -X PUT "repos/$REPO/pulls/$PR/merge" -f merge_method=squash -f sha="$(head_sha "$PR")" >/dev/null; then
+              merged=1
+              break
+            fi
+            echo "merge attempt $attempt refused (likely $BASE moved while CI ran); updating and retrying"
+          done
+          [ "$merged" -eq 1 ] || refuse "could not merge PR #$PR to $BASE after 3 attempts (not mergeable)"
 
           gh api -X DELETE "repos/$REPO/issues/$PR/labels/admin-release" >/dev/null 2>&1 || true
-          echo "blu-bot merged PR #$PR to staging and triggered FF of main via promotion PR #$promo."
+          echo "blu-bot merged PR #$PR to $BASE. Promotion to production is manual: label the staging -> main PR."
