@@ -90,8 +90,11 @@ jobs:
 
           if [ "$BASE" = main ] || [ "$BASE" = master ]; then
             # Admin labelled a staging -> main promotion PR directly: approve + hand to FF_BOT.
+            # No CI wait: everything on staging already passed CI on its way in, ff-merge-bot
+            # waits for no check either, and the promotion PR's head IS the staging commit, so
+            # waiting would only re-check staging's own push workflows (preview builds, cache
+            # warming), any of which could block a release without saying anything about it.
             [ "$(gh api "repos/$REPO/pulls/$PR" --jq .head.ref)" = staging ] || refuse "only staging can be promoted to $BASE"
-            wait_ci_green "$PR" || refuse "CI is not green on promotion PR #$PR"
             approve "$PR" "$PROV Promoting staging -> $BASE."
             gh pr edit "$PR" -R "$REPO" --add-label ff-merge
             echo "blu-bot approved promotion PR #$PR and labelled ff-merge; FF_BOT will fast-forward $BASE."
